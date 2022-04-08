@@ -1,0 +1,25 @@
+#+TITLE: CL interface to Secret Service API
+
+This is a (read-only at the moment) interface to the Secret Service API in Common Lisp. Secret service is an API to store keys and passwords in a dedicated service; both Gnome and KDE provide such service (gnome-keyring).
+
+It allows one to offload caring about how to safely store passwords and keys for CL projects to someone else.
+
+Usage:
+#+begin_src lisp
+  (find-all-secrets '("machine" "example.com"))
+#+end_src
+
+would list secrets with parameter machine having provided value. The output is some list; use (mapcar)  ~STRINGIFY-SECRET~ to turn this list to the proper password.
+
+Presently, writing is not implemened - use Seahorse or Emacs secret-show-secrets or whatever for GUI access, and something like
+#+begin_src sh
+  sed '/^$/d;s/.*/secret-tool store --label=From-authinfo &'/ ~/.authinfo | sed 's/\(.*\) password \([^ ]*\)/echo -n \2 | \1/'
+#+end_src
+
+did most of job of one-time conversion from authinfo format.
+
+BUGS/TODOS:
+- Locking/unlocking
+- Implement collections (and prompts) - and this is a prerequisite for write access.
+- probably naming should be improved and code cleaned up.
+- encryption on fly in dbus (non-plain sessions)
