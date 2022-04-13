@@ -24,6 +24,28 @@
     (with-introspected-object (ss bus path secrets-service)
       (apply #'ss service2 args))))
 
+
+;;;; Sessions
+(defun funcall-with-session (fn)
+  "Helper for macro below.
+
+The only purpose of sessions here is to provide information about how password should be protected on fly. We do not protect it now (PLAIN method)."
+  (with-open-bus (bus (session-server-addresses))
+     (with-introspected-object (ss bus secrets-path secrets-service)
+       (let ((session (nth-value 1 (ss "org.freedesktop.Secret.Service" "OpenSession" "plain" '((:string) "")))))
+         (funcall fn session bus #'ss)))))
+
+(defmacro with-open-session ((session  &optional (bus (gensym)) (secret-service-fn (gensym))) &body body)
+  "Run BODY with SESSION and BUS bound to open session path and bus object, respectively."
+  `(funcall-with-session (lambda (,session ,bus ,secret-service-fn)
+                           (declare (ignorable ,bus))
+                           (flet ((,secret-service-fn (&rest args)
+                                    (apply ,secret-service-fn args)))
+                             (declare (ignorable (function ,secret-service-fn)))
+                             ,@body))))
+
+;;; Secret items
+
 (defun find-secrets (&rest pars)
   "Find secret objects that satisfy attributes given in PARS.
 
@@ -34,32 +56,60 @@ Returns two values, paths of unlocked objects and paths of locked objects."
   "Find all secrets with attributes in PARS.
 
 E.g., (find-all-secrets '(\"machine\" \"example.com\"))"
-  (with-open-bus (bus (session-server-addresses))
-    (with-introspected-object (ss bus secrets-path secrets-service)
-      (ss "org.freedesktop.Secret.Service" "GetSecrets"
-             (ss "org.freedesktop.Secret.Service" "SearchItems" pars)
-             (nth-value 1 (ss "org.freedesktop.Secret.Service" "OpenSession" "plain" '((:string) "")))))))
+  (with-open-session (session bus ss)
+    (ss "org.freedesktop.Secret.Service" "GetSecrets"
+        (ss "org.freedesktop.Secret.Service" "SearchItems" pars) session))
+)
 
 (defun stringify-secret (secret)
   "Turn data returned by D-Bus to a secret string"
   (map 'string 'code-char (third (second secret))))
 
+(defun get-item-class-attributes (class item)
+  "Get all attributes of ITEM of class CLASS."
+  (mapcar (lambda (a) (cons (intern (string-upcase (car a)) "KEYWORD") (cdr a)))
+          (dbus-call-method item "org.freedesktop.DBus.Properties" "GetAll" class)))
+
+
+;;;; Secret items
 (defun get-secret-item-attributes (item)
-  (dbus-call-method item "org.freedesktop.DBus.Properties" "GetAll"  "org.freedesktop.Secret.Item"))
+  "An alist of all item attributes. The cars of each item is a keyword."
+  (get-item-class-attributes "org.freedesktop.Secret.Item" item))
 
 (defun set-secret-item-attribute (item label value)
   (dbus-call-method item "org.freedesktop.DBus.Properties" "Set" "org.freedesktop.Secret.Item" label `((:string) ,value)))
+
+(defun create-item (collection-path label dict secret
+                    &key replace (content-type "text/plain"))
+  "Create an item.
+
+  Collection-path is a path to the collection (e.g.,\"/org/freedesktop/secrets/collection/login\", LABEL name, DICT alist of attributes (all atoms strings), and SECRET the secret to store."
+  (with-open-session (session bus)
+    (with-introspected-object (ss2 bus collection-path secrets-service)
+      (ss2 "org.freedesktop.Secret.Collection" "CreateItem"
+           `(("org.freedesktop.Secret.Item.Label" ("s" ,label))
+             ("org.freedesktop.Secret.Item.Attributes" ("a{ss}" ,dict)))
+           (list session nil
+                 (map '(vector (unsigned-byte 8)) 'char-code secret) ;; not correct
+                 content-type)
+           replace))))
+
+
+;;;; Collections
+(defun get-collection-attributes (collection-path)
+  (get-item-class-attributes "org.freedesktop.Secret.Collection" collection-path))
+
+(defun get-collections-list ()
+  (dbus-call-method secrets-path "org.freedesktop.DBus.Properties" "Get" "org.freedesktop.Secret.Service" "Collections"))
 
 (defun make-object (path type)
   (with-open-bus (bus (session-server-addresses))
     (make-object-from-introspection (bus-connection bus) path type)))
 
-(defun open-session ()
-  (with-open-bus (bus (session-server-addresses))
-    (with-introspected-object (ss bus secrets-path secrets-service)
-      (ss "org.freedesktop.Secret.Service" "OpenSession" "plain" '((:string) "")))))
-
-#+nil(defun rename-secret (item)
+
+;;;; ad-hoc
+#+nil
+(defun rename-secret (item)
   "Relabel all secrets labeled From-authinfo to machine/login. This was part of
 migration from authinfo and not strictly needed."
   (let* ((attrs (get-secret-item-attributes item))
