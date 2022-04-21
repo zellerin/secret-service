@@ -4,19 +4,14 @@ This is a partial interface to the Secret Service API in Common Lisp. Secret ser
 
 It allows one to offload caring about how to safely store passwords and keys for CL projects to someone else.
 
-Usage:
+Simple usage:
 #+begin_src lisp
-  (find-all-secrets '("machine" "example.com"))
+  (find-the-secret '(("machine" "example.com")))
 #+end_src
 
-would list secrets with parameter machine having provided value. The output is some list; use (mapcar)  ~STRINGIFY-SECRET~ to turn this list to the proper password.
+would list secrets with parameter machine having provided value. The output is a list/structure secret; use  ~STRINGIFY-SECRET~ to it this list to the proper password.
 
-Presently, writing is not implemened - use Seahorse or Emacs secret-show-secrets or whatever for GUI access, and something like
-#+begin_src sh
-  sed '/^$/d;s/.*/secret-tool store --label=From-authinfo &'/ ~/.authinfo | sed 's/\(.*\) password \([^ ]*\)/echo -n \2 | \1/'
-#+end_src
-
-did most of job of one-time conversion from authinfo format.
+See [[./test.lisp][test cases]] for more on creating and searching secrets.
 
 BUGS/TODOS:
 - Locking/unlocking
