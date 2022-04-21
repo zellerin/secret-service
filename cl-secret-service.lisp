@@ -58,8 +58,7 @@ Returns two values, paths of unlocked objects and paths of locked objects."
 E.g., (find-all-secrets '(\"machine\" \"example.com\"))"
   (with-open-session (session bus ss)
     (ss "org.freedesktop.Secret.Service" "GetSecrets"
-        (ss "org.freedesktop.Secret.Service" "SearchItems" pars) session))
-)
+        (ss "org.freedesktop.Secret.Service" "SearchItems" pars) session)))
 
 (defun stringify-secret (secret)
   "Turn data returned by D-Bus to a secret string"
@@ -71,13 +70,21 @@ E.g., (find-all-secrets '(\"machine\" \"example.com\"))"
           (dbus-call-method item "org.freedesktop.DBus.Properties" "GetAll" class)))
 
 
-;;;; Secret items
+;(defstruct (secret :type list) session parameters value content-type)
+
 (defun get-secret-item-attributes (item)
   "An alist of all item attributes. The cars of each item is a keyword."
   (get-item-class-attributes "org.freedesktop.Secret.Item" item))
 
-(defun set-secret-item-attribute (item label value)
-  (dbus-call-method item "org.freedesktop.DBus.Properties" "Set" "org.freedesktop.Secret.Item" label `((:string) ,value)))
+(defun (setf get-secret-item-property) (value item label)
+  (dbus-call-method item "org.freedesktop.DBus.Properties" "Set" "org.freedesktop.Secret.Item" label
+                    (etypecase value
+                      (string `((:string) ,value))
+                      (cons `("a{ss}" ,value)))))
+
+(defun get-secret-item-attribute (item label)
+  (second (assoc label
+                 (second (assoc :attributes (get-secret-item-attributes item))) :test 'equal)))
 
 (defun create-item (collection-path label dict secret
                     &key replace (content-type "text/plain"))
@@ -93,6 +100,11 @@ E.g., (find-all-secrets '(\"machine\" \"example.com\"))"
                  (map '(vector (unsigned-byte 8)) 'char-code secret) ;; not correct
                  content-type)
            replace))))
+
+(defun delete-secret (path)
+  (with-open-bus (bus (session-server-addresses))
+      (with-introspected-object (ss2 bus path secrets-service)
+        (ss2 "org.freedesktop.Secret.Item" "Delete"))))
 
 
 ;;;; Collections
