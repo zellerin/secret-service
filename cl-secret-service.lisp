@@ -45,24 +45,51 @@ The only purpose of sessions here is to provide information about how password s
                              ,@body))))
 
 ;;; Secret items
+(defstruct (secret (:type list))
+  "Secret description"
+  session parameters value content-type)
 
-(defun find-secrets (&rest pars)
+(defun find-secrets (pars)
   "Find secret objects that satisfy attributes given in PARS.
 
 Returns two values, paths of unlocked objects and paths of locked objects."
   (dbus-call-method secrets-path "org.freedesktop.Secret.Service" "SearchItems" pars))
 
-(defun find-all-secrets (&rest pars)
-  "Find all secrets with attributes in PARS.
+(defun find-all-secrets (pars)
+  "Find all secrets with attributes in PARS.  Returns a list of
+match pairs (path secret). See secret structure for the second item format.
 
-E.g., (find-all-secrets '(\"machine\" \"example.com\"))"
+E.g., (find-all-secrets '(\"machine\" \"example.com\")). "
   (with-open-session (session bus ss)
     (ss "org.freedesktop.Secret.Service" "GetSecrets"
         (ss "org.freedesktop.Secret.Service" "SearchItems" pars) session)))
 
+(define-condition secret-item-search-error (error)
+  ((parameters :accessor get-parameters :initarg :parameters)
+   (error-text :accessor get-error-text :initarg :error-text)))
+
+(defun find-the-secret (pars)
+  "Make sure that there is just one secret matching pars, and return it.
+Raise error otherwise, or when the secret needs to be unlocked."
+  (multiple-value-bind (unlocked locked)
+      (find-secrets pars)
+    (cond
+      ((and unlocked (null locked) (null (cdr unlocked)))
+       (with-open-session (session bus)
+         (with-introspected-object (item bus (first unlocked) secrets-service)
+           (item "org.freedesktop.Secret.Item" "GetSecret" session))))
+      ((and locked (null unlocked) (null (cdr locked))
+             (error 'secret-item-search-error :parameters pars
+                                              :text "Secret item is locked")))
+      ((and (null locked) (null unlocked)
+             (error 'secret-item-search-error :parameters pars
+                                              :text "No matching secret")))
+      (t (error 'secret-item-search-error :parameters pars
+                                            :text "More that one matching item")))))
+
 (defun stringify-secret (secret)
-  "Turn data returned by D-Bus to a secret string"
-  (map 'string 'code-char (third (second secret))))
+  "Turn secret structure returned by D-Bus to a secret string"
+  (map 'string 'code-char (secret-value secret)))
 
 (defun get-item-class-attributes (class item)
   "Get all attributes of ITEM of class CLASS."
@@ -70,8 +97,6 @@ E.g., (find-all-secrets '(\"machine\" \"example.com\"))"
           (dbus-call-method item "org.freedesktop.DBus.Properties" "GetAll" class)))
 
 
-;(defstruct (secret :type list) session parameters value content-type)
-
 (defun get-secret-item-attributes (item)
   "An alist of all item attributes. The cars of each item is a keyword."
   (get-item-class-attributes "org.freedesktop.Secret.Item" item))

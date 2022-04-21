@@ -3,5 +3,7 @@
   (:export #:find-all-secrets #:stringify-secret #:get-secret-item-attributes
            #:get-secret-item-attribute
            #:get-secret-item-property
+           #:secret-item-search-error
            #:get-collections-list
+           #:find-the-secret
            #:create-item #:delete-secret))
