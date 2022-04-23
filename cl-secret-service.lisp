@@ -11,18 +11,28 @@
 (defvar secrets-path "/org/freedesktop/secrets"
   "The D-Bus root object path used to talk to Secret Service.")
 
-(defvar secrets-session-collection-path
-  "/org/freedesktop/secrets/collection/session"
-  "The D-Bus temporary session collection object path.")
-
 (defvar secrets-interface-item "org.freedesktop.Secret.Item"
   "A collection of items containing secrets.")
 
-(defun dbus-call-method (path secrets-interface &rest args)
-  "Simple single Secret service call."
+(defun invoke-secret-service-method (path method signature &rest args)
   (with-open-bus (bus (session-server-addresses))
-    (with-introspected-object (ss bus path secrets-service)
-      (apply #'ss secrets-interface args))))
+    (invoke-method (bus-connection bus)
+                   method
+                   :destination secrets-service
+                   :path path
+                   :interface "org.freedesktop.Secret.Service"
+                   :signature signature
+                   :arguments args)))
+
+(defun invoke-properties-method (path method signature &rest args)
+  (with-open-bus (bus (session-server-addresses))
+    (invoke-method (bus-connection bus)
+                   method
+                   :destination secrets-service
+                   :path path
+                   :interface "org.freedesktop.DBus.Properties"
+                   :signature signature
+                   :arguments args)))
 
 
 ;;;; Sessions
@@ -60,7 +70,7 @@ Macro WITH-OPEN-SESSION uses this.
   "Find secret objects that satisfy attributes given in PARS.
 
 Returns two values, paths of unlocked objects and paths of locked objects."
-  (dbus-call-method secrets-path "org.freedesktop.Secret.Service" "SearchItems" pars))
+  (invoke-secret-service-method secrets-path "SearchItems" "a{ss}" pars))
 
 (defun find-all-secrets (pars)
   "Find all secrets with attributes in PARS.  Returns a list of
@@ -109,12 +119,14 @@ E.g., (find-all-secrets '((\"machine\" \"example.com\"))). "
 (defun get-secret-of-item (path)
   "Get secret from secret item on PATH.
 
-Provide restart that tries to unlock and read again. This should not be standard situation, but, as API standard says, The inherent race conditions present due to this are unavoidable, and must be handled gracefully."
+Provide restart that tries to unlock and read again. This should not be standard
+situation, but, as API standard says, The inherent race conditions present due
+to this are unavoidable, and must be handled gracefully."
   (restart-case
       (stringify-secret
        (with-open-session (session bus)
          (with-introspected-object (item bus path secrets-service)
-           (item "org.freedesktop.Secret.Item" "GetSecret" session))))
+           (item secrets-interface-item "GetSecret" session))))
     (attempt-unlock (err)
       ;; can we do better? Is this guaranteed to work on other backends?
       (when (equalp (method-error-arguments err)
@@ -152,18 +164,18 @@ Raise error otherwise, or when the secret needs to be unlocked."
 (defun get-item-class-attributes (class item)
   "Get all attributes of ITEM of class CLASS."
   (mapcar (lambda (a) (cons (intern (string-upcase (car a)) "KEYWORD") (cdr a)))
-          (dbus-call-method item "org.freedesktop.DBus.Properties" "GetAll" class)))
+          (invoke-properties-method item "GetAll" "s" class)))
 
 (defun get-secret-item-properties (item)
   "An alist of all item attributes. The cars of each item is a keyword."
-  (get-item-class-attributes "org.freedesktop.Secret.Item" item))
+  (get-item-class-attributes secrets-interface-item item))
 
 (defun get-secret-item-property (item-path label)
   "Get attribute LABEL of secret item with path ITEM-PATH."
   (second (assoc label (get-secret-item-properties item-path) :test #'equal)))
 
 (defun (setf get-secret-item-property) (value item label)
-  (dbus-call-method item "org.freedesktop.DBus.Properties" "Set" "org.freedesktop.Secret.Item" label
+  (invoke-properties-method item "Set" "ssv" secrets-interface-item label
                     (etypecase value
                       (string `((:string) ,value))
                       (cons `("a{ss}" ,value)))))
@@ -198,7 +210,7 @@ Raise error otherwise, or when the secret needs to be unlocked."
 (defun delete-secret (path)
   (with-open-bus (bus (session-server-addresses))
       (with-introspected-object (ss2 bus path secrets-service)
-        (ss2 "org.freedesktop.Secret.Item" "Delete"))))
+        (ss2 secrets-interface-item "Delete"))))
 
 
 ;;;; Collections
@@ -206,7 +218,7 @@ Raise error otherwise, or when the secret needs to be unlocked."
   (get-item-class-attributes "org.freedesktop.Secret.Collection" collection-path))
 
 (defun get-collections-list ()
-  (dbus-call-method secrets-path "org.freedesktop.DBus.Properties" "Get" "org.freedesktop.Secret.Service" "Collections"))
+  (invoke-properties-method secrets-path "Get" "ss" "org.freedesktop.Secret.Service" "Collections"))
 
 (defun nil-if-slash (object)
   "Several functions return \"/\" as not found. Translate this to nil."
@@ -215,7 +227,7 @@ Raise error otherwise, or when the secret needs to be unlocked."
 (defun get-collection-by-alias (name)
   "Get collection path by alias name, or nil. There is one predefined alias, \"session\". "
   (nil-if-slash
-   (dbus-call-method secrets-path "org.freedesktop.Secret.Service"  "ReadAlias" name)))
+   (invoke-secret-service-method secrets-path "ReadAlias" "s" name)))
 
 (defun find-collection-by-name (name)
   "Find path to collection with label or alias NAME."
@@ -227,12 +239,7 @@ Raise error otherwise, or when the secret needs to be unlocked."
 
 ;;;; Locking
 (defun lock-paths (objects)
-  (dbus-call-method secrets-path "org.freedesktop.Secret.Service"  "Lock" objects))
+  (invoke-secret-service-method secrets-path "Lock" "ao" objects))
 
 (defun unlock-paths (objects)
-  (dbus-call-method secrets-path "org.freedesktop.Secret.Service"  "Unlock" objects))
-
-
-(defun make-object (path type)
-  (with-open-bus (bus (session-server-addresses))
-    (make-object-from-introspection (bus-connection bus) path type)))
+  (invoke-secret-service-method secrets-path "Unlock" "ao" objects))
