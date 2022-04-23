@@ -15,3 +15,5 @@ See [[./test.lisp][test cases]] for more detail on creating and searching secret
 
 BUGS/TODOS:
 - encryption on fly in dbus (non-plain sessions)
+- complete the few missing APIs (collections mostly)
+- It would be better to wait for the unlocking result than to poll.
