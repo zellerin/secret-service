@@ -14,15 +14,19 @@
 (defvar secrets-interface-item "org.freedesktop.Secret.Item"
   "A collection of items containing secrets.")
 
-(defun invoke-secret-service-method (path method signature &rest args)
-  (with-open-bus (bus (session-server-addresses))
-    (invoke-method (bus-connection bus)
-                   method
-                   :destination secrets-service
-                   :path path
-                   :interface "org.freedesktop.Secret.Service"
-                   :signature signature
-                   :arguments args)))
+(defun invoke-secret-service-method (maybe-bus path method signature &rest args)
+  (flet ((doit (bus)
+             (invoke-method (bus-connection bus)
+              method
+              :destination secrets-service
+              :path path
+              :interface "org.freedesktop.Secret.Service"
+              :signature signature
+              :arguments args)))
+    (if maybe-bus
+        (doit maybe-bus)
+        (with-open-bus (bus (session-server-addresses))
+          (doit bus)))))
 
 (defun invoke-properties-method (path method signature &rest args)
   (with-open-bus (bus (session-server-addresses))
@@ -35,28 +39,9 @@
                    :arguments args)))
 
 
-;;;; Sessions
-(defun funcall-with-bus-and-session (fn)
-  "Call FN with three parameters SESSION, BUS and SECRET-SERVICE-FN. First two are open session and bus, third is a function (to be described).
-
-Macro WITH-OPEN-SESSION uses this.
-
- The only purpose of sessions here is to provide information about how password
- should be protected on fly. We do not protect it now (PLAIN method)."
-  (with-open-bus (bus (session-server-addresses))
-     (with-introspected-object (ss bus secrets-path secrets-service)
-       (let ((session (nth-value 1 (ss "org.freedesktop.Secret.Service" "OpenSession" "plain" '((:string) "")))))
-         (funcall fn session bus #'ss)))))
-
-(defmacro with-open-session ((session  &optional (bus (gensym)) (secret-service-fn (gensym))) &body body)
-  "Run BODY with SESSION and BUS bound to open session path and bus object, respectively."
-  `(funcall-with-bus-and-session (lambda (,session ,bus ,secret-service-fn)
-                           (declare (string session)
-                                    (ignorable ,bus))
-                           (flet ((,secret-service-fn (&rest args)
-                                    (apply ,secret-service-fn args)))
-                             (declare (ignorable (function ,secret-service-fn)))
-                             ,@body))))
+(defun get-session (bus)
+  (nth-value 1 (invoke-secret-service-method bus secrets-path "OpenSession"
+                                             "sv" "plain" '((:string) ""))))
 
 ;;; Secret items
 (defstruct (secret (:type list))
@@ -66,20 +51,21 @@ Macro WITH-OPEN-SESSION uses this.
   value         ; Possibly encoded secret value
   content-type) ; The content type of the secret. For example: 'text/plain; charset=utf8'
 
-(defun find-secret-paths (pars)
+(defun find-secret-paths (pars &optional bus)
   "Find secret objects that satisfy attributes given in PARS.
 
 Returns two values, paths of unlocked objects and paths of locked objects."
-  (invoke-secret-service-method secrets-path "SearchItems" "a{ss}" pars))
+  (invoke-secret-service-method bus secrets-path "SearchItems" "a{ss}" pars))
 
 (defun find-all-secrets (pars)
   "Find all secrets with attributes in PARS.  Returns a list of
 match pairs (path secret). See secret structure for the second item format.
 
 E.g., (find-all-secrets '((\"machine\" \"example.com\"))). "
-  (with-open-session (session bus ss)
-    (ss "org.freedesktop.Secret.Service" "GetSecrets"
-        (ss "org.freedesktop.Secret.Service" "SearchItems" pars) session)))
+  (with-open-bus (bus (session-server-addresses))
+    (invoke-secret-service-method bus secrets-path  "GetSecrets" "aoo"
+                                  (find-secret-paths pars bus)
+                                  (get-session bus))))
 
 (define-condition secret-item-search-error (error)
   ((parameters :accessor get-parameters :initarg :parameters)
@@ -102,8 +88,7 @@ E.g., (find-all-secrets '((\"machine\" \"example.com\"))). "
   "Unlock a secret item on PATH."
   (with-open-bus (bus (session-server-addresses))
           (multiple-value-bind (done prompt)
-              (with-introspected-object (ss bus secrets-path secrets-service)
-                (ss "org.freedesktop.Secret.Service" "Unlock" (list path)))
+              (unlock-paths (list path) bus)
             (unless done
               (with-introspected-object (p bus prompt secrets-service)
                 (p "org.freedesktop.Secret.Prompt" "Prompt" ""))
@@ -124,9 +109,9 @@ situation, but, as API standard says, The inherent race conditions present due
 to this are unavoidable, and must be handled gracefully."
   (restart-case
       (stringify-secret
-       (with-open-session (session bus)
+       (with-open-bus (bus (session-server-addresses))
          (with-introspected-object (item bus path secrets-service)
-           (item secrets-interface-item "GetSecret" session))))
+           (item secrets-interface-item "GetSecret" (get-session bus)))))
     (attempt-unlock (err)
       ;; can we do better? Is this guaranteed to work on other backends?
       (when (equalp (method-error-arguments err)
@@ -197,14 +182,14 @@ Raise error otherwise, or when the secret needs to be unlocked."
   "Create an item.
 
   Collection-path is a path to the collection (e.g.,\"/org/freedesktop/secrets/collection/login\", LABEL name, DICT alist of attributes (all atoms strings), and SECRET the secret to store."
-  (with-open-session (session bus)
+  (with-open-bus (bus (session-server-addresses))
     (with-introspected-object (ss2 bus collection-path secrets-service)
       (ss2 "org.freedesktop.Secret.Collection" "CreateItem"
            `(("org.freedesktop.Secret.Item.Label" ("s" ,label))
              ("org.freedesktop.Secret.Item.Attributes" ("a{ss}" ,dict)))
-           (list session nil
-                 (map '(vector (unsigned-byte 8)) 'char-code secret) ;; not correct
-                 content-type)
+           (make-secret :session (get-session bus)
+                        :value (map '(vector (unsigned-byte 8)) 'char-code secret) ;; not correct
+                        :content-type content-type)
            replace))))
 
 (defun delete-secret (path)
@@ -227,7 +212,7 @@ Raise error otherwise, or when the secret needs to be unlocked."
 (defun get-collection-by-alias (name)
   "Get collection path by alias name, or nil. There is one predefined alias, \"session\". "
   (nil-if-slash
-   (invoke-secret-service-method secrets-path "ReadAlias" "s" name)))
+   (invoke-secret-service-method nil secrets-path "ReadAlias" "s" name)))
 
 (defun find-collection-by-name (name)
   "Find path to collection with label or alias NAME."
@@ -239,7 +224,7 @@ Raise error otherwise, or when the secret needs to be unlocked."
 
 ;;;; Locking
 (defun lock-paths (objects)
-  (invoke-secret-service-method secrets-path "Lock" "ao" objects))
+  (invoke-secret-service-method nil secrets-path "Lock" "ao" objects))
 
-(defun unlock-paths (objects)
-  (invoke-secret-service-method secrets-path "Unlock" "ao" objects))
+(defun unlock-paths (objects &optional bus)
+  (invoke-secret-service-method bus secrets-path "Unlock" "ao" objects))
