@@ -18,18 +18,21 @@
 (defvar secrets-interface-item "org.freedesktop.Secret.Item"
   "A collection of items containing secrets.")
 
-(defun dbus-call-method (path service2 &rest args)
+(defun dbus-call-method (path secrets-interface &rest args)
   "Simple single Secret service call."
   (with-open-bus (bus (session-server-addresses))
     (with-introspected-object (ss bus path secrets-service)
-      (apply #'ss service2 args))))
+      (apply #'ss secrets-interface args))))
 
 
 ;;;; Sessions
-(defun funcall-with-session (fn)
-  "Helper for macro below.
+(defun funcall-with-bus-and-session (fn)
+  "Call FN with three parameters SESSION, BUS and SECRET-SERVICE-FN. First two are open session and bus, third is a function (to be described).
 
-The only purpose of sessions here is to provide information about how password should be protected on fly. We do not protect it now (PLAIN method)."
+Macro WITH-OPEN-SESSION uses this.
+
+ The only purpose of sessions here is to provide information about how password
+ should be protected on fly. We do not protect it now (PLAIN method)."
   (with-open-bus (bus (session-server-addresses))
      (with-introspected-object (ss bus secrets-path secrets-service)
        (let ((session (nth-value 1 (ss "org.freedesktop.Secret.Service" "OpenSession" "plain" '((:string) "")))))
@@ -37,8 +40,9 @@ The only purpose of sessions here is to provide information about how password s
 
 (defmacro with-open-session ((session  &optional (bus (gensym)) (secret-service-fn (gensym))) &body body)
   "Run BODY with SESSION and BUS bound to open session path and bus object, respectively."
-  `(funcall-with-session (lambda (,session ,bus ,secret-service-fn)
-                           (declare (ignorable ,bus))
+  `(funcall-with-bus-and-session (lambda (,session ,bus ,secret-service-fn)
+                           (declare (string session)
+                                    (ignorable ,bus))
                            (flet ((,secret-service-fn (&rest args)
                                     (apply ,secret-service-fn args)))
                              (declare (ignorable (function ,secret-service-fn)))
@@ -46,10 +50,13 @@ The only purpose of sessions here is to provide information about how password s
 
 ;;; Secret items
 (defstruct (secret (:type list))
-  "Secret description"
-  session parameters value content-type)
+  "A (possibly encoded) secret, see https://specifications.freedesktop.org/secret-service/latest/ch14.html"
+  session       ; The session that was used to encode the secret
+  parameters    ; Algorithm dependent parameters for secret value encoding
+  value         ; Possibly encoded secret value
+  content-type) ; The content type of the secret. For example: 'text/plain; charset=utf8'
 
-(defun find-secrets (pars)
+(defun find-secret-paths (pars)
   "Find secret objects that satisfy attributes given in PARS.
 
 Returns two values, paths of unlocked objects and paths of locked objects."
@@ -59,47 +66,101 @@ Returns two values, paths of unlocked objects and paths of locked objects."
   "Find all secrets with attributes in PARS.  Returns a list of
 match pairs (path secret). See secret structure for the second item format.
 
-E.g., (find-all-secrets '(\"machine\" \"example.com\")). "
+E.g., (find-all-secrets '((\"machine\" \"example.com\"))). "
   (with-open-session (session bus ss)
     (ss "org.freedesktop.Secret.Service" "GetSecrets"
         (ss "org.freedesktop.Secret.Service" "SearchItems" pars) session)))
 
 (define-condition secret-item-search-error (error)
   ((parameters :accessor get-parameters :initarg :parameters)
-   (error-text :accessor get-error-text :initarg :error-text)))
+   (error-text :accessor get-error-text :initarg :text)
+   (candidates :accessor get-candidates :initarg :candidates
+               :initform nil))
+  (:report (lambda (cond stream)
+             (format stream "Cannot find single secret with ~{~{~a=~a~}~^, ~}: ~a ~@[~a~]"
+                     (get-parameters cond)
+                     (get-error-text cond)
+                     (mapcar #'get-secret-item-label (get-candidates cond))))))
+
+(define-condition secret-item-unlock-dismissed (error)
+  ((path :accessor get-path :initarg :path))
+  (:report (lambda (cond stream)
+             (format stream "Password prompt was dismissed when opening secret ~a"
+                     (get-secret-item-label (get-path cond))))))
+
+(defun unlock-secret-item (path)
+  "Unlock a secret item on PATH."
+  (with-open-bus (bus (session-server-addresses))
+          (multiple-value-bind (done prompt)
+              (with-introspected-object (ss bus secrets-path secrets-service)
+                (ss "org.freedesktop.Secret.Service" "Unlock" (list path)))
+            (unless done
+              (with-introspected-object (p bus prompt secrets-service)
+                (p "org.freedesktop.Secret.Prompt" "Prompt" ""))
+              (loop
+                (sleep 0.1) ; can we wait instead of polling?
+                (let ((message (receive-message-no-hang (bus-connection bus))))
+                  (cond ((and (typep message 'signal-message)
+                              (equal (message-member message) "Completed"))
+                         (if (car (message-body message)) ; dismissed?
+                             (error 'secret-item-unlock-dismissed :path path)
+                             (return))))))))))
+
+(defun get-secret-of-item (path)
+  "Get secret from secret item on PATH.
+
+Provide restart that tries to unlock and read again. This should not be standard situation, but, as API standard says, The inherent race conditions present due to this are unavoidable, and must be handled gracefully."
+  (restart-case
+      (stringify-secret
+       (with-open-session (session bus)
+         (with-introspected-object (item bus path secrets-service)
+           (item "org.freedesktop.Secret.Item" "GetSecret" session))))
+    (attempt-unlock (err)
+      ;; can we do better? Is this guaranteed to work on other backends?
+      (when (equalp (method-error-arguments err)
+                    '("Cannot get secret of a locked object"))
+        (unlock-secret-item path)
+        (get-secret-of-item path)))))
 
 (defun find-the-secret (pars)
   "Make sure that there is just one secret matching pars, and return it.
 Raise error otherwise, or when the secret needs to be unlocked."
   (multiple-value-bind (unlocked locked)
-      (find-secrets pars)
+      (find-secret-paths pars)
     (cond
       ((and unlocked (null locked) (null (cdr unlocked)))
-       (with-open-session (session bus)
-         (with-introspected-object (item bus (first unlocked) secrets-service)
-           (item "org.freedesktop.Secret.Item" "GetSecret" session))))
-      ((and locked (null unlocked) (null (cdr locked))
-             (error 'secret-item-search-error :parameters pars
-                                              :text "Secret item is locked")))
+       (get-secret-of-item (first unlocked)))
+      ((and locked (null unlocked) (null (cdr locked)))
+       (unlock-secret-item (car locked))
+       (get-secret-of-item (car locked)))
       ((and (null locked) (null unlocked)
-             (error 'secret-item-search-error :parameters pars
-                                              :text "No matching secret")))
-      (t (error 'secret-item-search-error :parameters pars
-                                            :text "More that one matching item")))))
+            (error 'secret-item-search-error :parameters pars
+                                             :text "No matching secret")))
+      (t
+       (restart-case
+           (error 'secret-item-search-error :parameters pars
+                                            :text "More that one matching item"
+                                            :candidates (append unlocked locked)))))))
 
 (defun stringify-secret (secret)
   "Turn secret structure returned by D-Bus to a secret string"
   (map 'string 'code-char (secret-value secret)))
+
+;;;; Secret items have fixed list ofproperties, and one of them is an alist attributes.
+;;;; Searching is done on attributes.
 
 (defun get-item-class-attributes (class item)
   "Get all attributes of ITEM of class CLASS."
   (mapcar (lambda (a) (cons (intern (string-upcase (car a)) "KEYWORD") (cdr a)))
           (dbus-call-method item "org.freedesktop.DBus.Properties" "GetAll" class)))
 
-
-(defun get-secret-item-attributes (item)
+(defun get-secret-item-properties (item)
   "An alist of all item attributes. The cars of each item is a keyword."
   (get-item-class-attributes "org.freedesktop.Secret.Item" item))
+
+(defun get-secret-item-property (item-path label)
+  "Get attribute LABEL of secret item with path ITEM-PATH."
+  (second (assoc label (get-secret-item-properties item-path) :test #'equal)))
 
 (defun (setf get-secret-item-property) (value item label)
   (dbus-call-method item "org.freedesktop.DBus.Properties" "Set" "org.freedesktop.Secret.Item" label
@@ -107,9 +168,17 @@ Raise error otherwise, or when the secret needs to be unlocked."
                       (string `((:string) ,value))
                       (cons `("a{ss}" ,value)))))
 
+(defun get-secret-item-label (item-path)
+  "Get label of item with ITEM-PATH"
+  (get-secret-item-property item-path :label ))
+
+(defun get-secret-item-attributes (item-path)
+  "An alist of all item attributes. The cars of each item is a keyword."
+  (get-secret-item-property item-path :attributes))
+
 (defun get-secret-item-attribute (item label)
-  (second (assoc label
-                 (second (assoc :attributes (get-secret-item-attributes item))) :test 'equal)))
+  "Get attribute of a secret item"
+  (second (assoc label (get-secret-item-attributes item) :test 'equal)))
 
 (defun create-item (collection-path label dict secret
                     &key replace (content-type "text/plain"))
@@ -139,19 +208,31 @@ Raise error otherwise, or when the secret needs to be unlocked."
 (defun get-collections-list ()
   (dbus-call-method secrets-path "org.freedesktop.DBus.Properties" "Get" "org.freedesktop.Secret.Service" "Collections"))
 
+(defun nil-if-slash (object)
+  "Several functions return \"/\" as not found. Translate this to nil."
+  (unless (equal object "/") object))
+
+(defun get-collection-by-alias (name)
+  "Get collection path by alias name, or nil. There is one predefined alias, \"session\". "
+  (nil-if-slash
+   (dbus-call-method secrets-path "org.freedesktop.Secret.Service"  "ReadAlias" name)))
+
+(defun find-collection-by-name (name)
+  "Find path to collection with label or alias NAME."
+  (or (get-collection-by-alias name)
+      (find name (get-collections-list)
+            :key (lambda (p) (second (assoc :label (get-collection-attributes p))))
+            :test 'equal)))
+
+
+;;;; Locking
+(defun lock-paths (objects)
+  (dbus-call-method secrets-path "org.freedesktop.Secret.Service"  "Lock" objects))
+
+(defun unlock-paths (objects)
+  (dbus-call-method secrets-path "org.freedesktop.Secret.Service"  "Unlock" objects))
+
+
 (defun make-object (path type)
   (with-open-bus (bus (session-server-addresses))
     (make-object-from-introspection (bus-connection bus) path type)))
-
-
-;;;; ad-hoc
-#+nil
-(defun rename-secret (item)
-  "Relabel all secrets labeled From-authinfo to machine/login. This was part of
-migration from authinfo and not strictly needed."
-  (let* ((attrs (get-secret-item-attributes item))
-         (real-attrs (second (assoc "Attributes" attrs :test 'equal))))
-    (when (equal (second (assoc "Label" attrs :test 'equal)) "From-authinfo")
-      (set-secret-item-attribute item "Label" (format nil "~A/~A"
-                                                      (second (assoc "machine" real-attrs :test 'equal))
-                                                      (second (assoc "login" real-attrs :test 'equal)))))))

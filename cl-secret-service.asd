@@ -17,4 +17,4 @@
   :version "0.1"
   :serial t
   :depends-on ("cl-secret-service" "stefil")
-  :components ((:file "test.lisp")))
+  :components ((:file "test")))

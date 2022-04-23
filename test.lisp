@@ -1,19 +1,22 @@
 (defpackage cl-secret-service-test
-  (:use #:cl-secret-service #:cl #:stefil))
+  (:use #:cl-secret-service #:cl #:stefil)
+  (:export #:all-tests))
 
 (in-package cl-secret-service-test)
 
 (defsuite* all-tests)
 
 (deftest standard-sessions-exist ()
-  (is (find "/login" (get-collections-list) :test 'search))
-  (is (find "/session" (get-collections-list) :test 'search)))
+  "Check that session that should always exist do."
+  (dolist (col '("session" "Login"))
+    (is (find-collection-by-name col))))
 
 (defun find-all-with-id (id)
   "Find all secrets with cl-test-id being id."
   (find-all-secrets `(("cl-test-id" ,id)))  )
 
 (defun check-ids-empty (ids)
+  "Check that there are no secrets with particular ids, and offer removal."
   (dolist (id ids)
     (let ((matches (find-all-with-id id)))
       (restart-case
@@ -24,14 +27,15 @@
                     (delete-secret (car a)))
                   matches))))))
 
-(defun delete-secrets-with-id(ids)
+(defun delete-secrets-with-id (ids)
   (dolist (id ids)
     (mapcar (lambda (a)
               (delete-secret (car a)))
             (find-all-with-id id))))
 
 (defmacro with-temp-secrets (ids &body body)
-  "Run body after checking that there are no secrets with IDs. Delete such secrets when body is left."
+  "Run body after checking that there are no secrets with IDs. Delete such
+ secrets when body is left."
   (let ((ids-var (gensym)))
     `(let ((,ids-var ',ids))
        (check-ids-empty ,ids-var)
@@ -48,19 +52,15 @@ Create secret, rename its label and attribute, and delete it. At each step test 
                    '(("cl-test-id" "1")) "Don't tell")
     (let* ((all-matches (find-all-secrets '(("cl-test-id" "1"))))
            (match (car all-matches))
-           (match-2 (find-the-secret '(("cl-test-id" "1"))))
            (match-path (first match))
            (match-object (second match)))
       (is match)
       (is (null (cdr all-matches)))
-      (is (equalp (cdr (second match)) (cdr match-2))
-          ;; these two should be same, except for the path
-          )
       (is (equal (get-secret-item-attribute match-path "cl-test-id") "1")
-          "Attribute not correct in ~s" (get-secret-item-attributes match-path))
+          "Attribute \"1\" not correct in ~s" (get-secret-item-attributes match-path))
       (setf (get-secret-item-property match-path "Attributes") '(("cl-test-id" "2")))
       (is (equal (get-secret-item-attribute match-path "cl-test-id") "2")
-          "Attribute not correct in ~s" (get-secret-item-attributes match-path))
+          "Attribute \"2\" not correct in ~s" (get-secret-item-attributes match-path))
       (is (equal (stringify-secret match-object) "Don't tell"))
       (delete-secret match-path)
       (is (null (find-all-secrets '(("cl-test-id" "1"))))
@@ -78,5 +78,6 @@ Create secret, rename its label and attribute, and delete it. At each step test 
       (signals secret-item-search-error (find-single-match))
       (add-new "First")
       (is (find-single-match))
+      (is (equal (find-single-match) "Don't tell"))
       (add-new "Second")
       (signals secret-item-search-error (find-single-match)))))

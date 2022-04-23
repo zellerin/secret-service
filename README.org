@@ -9,12 +9,9 @@ Simple usage:
   (find-the-secret '(("machine" "example.com")))
 #+end_src
 
-would list secrets with parameter machine having provided value. The output is a list/structure secret; use  ~STRINGIFY-SECRET~ to it this list to the proper password.
+would return password for the secret with parameter machine having provided value, if there is only one, prompting for password if necessary.
 
-See [[./test.lisp][test cases]] for more on creating and searching secrets.
+See [[./test.lisp][test cases]] for more detail on creating and searching secrets and work with collections.
 
 BUGS/TODOS:
-- Locking/unlocking
-- Implement prompts.
-- probably naming should be improved and code cleaned up.
 - encryption on fly in dbus (non-plain sessions)
