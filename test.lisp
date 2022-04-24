@@ -1,8 +1,8 @@
-(defpackage cl-secret-service-test
-  (:use #:cl-secret-service #:cl #:stefil)
+(defpackage secret-service-test
+  (:use #:secret-service #:cl #:stefil)
   (:export #:all-tests))
 
-(in-package cl-secret-service-test)
+(in-package secret-service-test)
 
 (defsuite* all-tests)
 

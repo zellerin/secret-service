@@ -1,4 +1,4 @@
-(in-package #:cl-secret-service)
+(in-package #:secret-service)
 
 ;;;; D-Bus primer:
 ;;;; - path and secrets-service name give you an object.
