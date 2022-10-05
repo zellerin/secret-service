@@ -141,7 +141,11 @@ Raise error otherwise, or when the secret needs to be unlocked."
 
 (defun stringify-secret (secret)
   "Turn secret structure returned by D-Bus to a secret string"
-  (map 'string 'code-char (secret-value secret)))
+  (if (stringp secret) secret
+    (let ((val (secret-value secret)))
+      (etypecase val
+        ((string) val)
+        ((or cons vector) (map 'string 'code-char val))))))
 
 ;;;; Secret items have fixed list ofproperties, and one of them is an alist attributes.
 ;;;; Searching is done on attributes.
