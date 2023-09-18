@@ -1,5 +1,5 @@
-(defpackage #:secret-service
-  (:use #:cl #:dbus)
+(mgl-pax:define-package #:secret-service
+  (:use #:cl #:dbus #:mgl-pax)
   (:export #:find-all-secrets #:stringify-secret #:get-secret-item-attributes
            #:get-secret-item-attribute
            #:get-secret-item-property

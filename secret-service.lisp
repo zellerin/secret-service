@@ -1,5 +1,37 @@
 (in-package #:secret-service)
 
+(defsection @index
+    (:title "Secret service CL API")
+  "This is a partial interface to the Secret Service API in Common Lisp. Secret
+service is an API to store keys and passwords in a dedicated service; both Gnome
+and KDE provide such service (gnome-keyring).
+
+It allows one to offload caring about how to safely store passwords and keys for
+CL projects to someone else.
+
+Simple usage:
+
+```
+  (find-the-secret '((\"machine\" \"example.com\")))
+```
+would return password for the secret with parameter machine having provided value, if there is only one, prompting for password if necessary.
+"
+  (find-all-secrets function)
+  (stringify-secret function)
+  (get-secret-item-attributes function)
+  (get-secret-item-attribute function)
+  (get-secret-item-property function)
+  (secret-item-search-error condition)
+  (get-collections-list function)
+  (find-collection-by-name function)
+  (get-collection-by-alias function)
+  (get-collection-attributes function)
+  (find-the-secret function)
+  (create-item function)
+  (delete-secret function))
+
+;;;; (mgl-pax:update-asdf-system-html-docs secret-service::@index :secret-service)
+
 ;;;; D-Bus primer:
 ;;;; - path and secrets-service name give you an object.
 ;;;; - Object, its "type"/interface name (object has several and can be probed for)  and method name (again, part of objects hash tables) give you a function to call. And the function  needs parameters.
@@ -61,7 +93,11 @@ Returns two values, paths of unlocked objects and paths of locked objects."
   "Find all secrets with attributes in PARS.  Returns a list of
 match pairs (path secret). See secret structure for the second item format.
 
-E.g., (find-all-secrets '((\"machine\" \"example.com\"))). "
+E.g.,
+```
+(find-all-secrets '((\"machine\" \"example.com\")))
+```
+"
   (with-open-bus (bus (session-server-addresses))
     (invoke-secret-service-method bus secrets-path  "GetSecrets" "aoo"
                                   (find-secret-paths pars bus)

@@ -7,7 +7,7 @@
   :license  "Specify license here"
   :version "1.0"
   :serial t
-  :depends-on ("dbus")
+  :depends-on ("dbus" "mgl-pax")
   :components ((:file "package")
                (:file "secret-service"))
   :in-order-to ((test-op (test-op "secret-service/test"))))
