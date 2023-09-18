@@ -2,7 +2,7 @@
 
 (defsection @index
     (:title "Secret service CL API")
-  "This is a partial interface to the Secret Service API in Common Lisp. Secret
+  "This is a partial interface to the [Secret Service API](https://specifications.freedesktop.org/secret-service/latest/index.html) in Common Lisp. Secret
 service is an API to store keys and passwords in a dedicated service; both Gnome
 and KDE provide such service (gnome-keyring).
 
@@ -14,21 +14,62 @@ Simple usage:
 ```
   (find-the-secret '((\"machine\" \"example.com\")))
 ```
-would return password for the secret with parameter machine having provided value, if there is only one, prompting for password if necessary.
+would return password for the secret with parameter machine having provided value,
+ if there is only one, prompting for password if necessary.
+
+```
+(create-item (default-collection) \"My shop\" nil \"password\")
+=> \"/org/freedesktop/secrets/collection/login/148\"
+=> \"/\"
+```
+
+would create an item with just a label and a secret and return the path to it;
+note that there is no property there that can be used to find the item by
+search, but it shows (e.g., in Seahorse or emacs) properly.
+
+```
+(get-secret-of-item *)
+=> \"password\"
+```
+would again reveal the password.
 "
+  (@find mgl-pax:section)
+  (@manage mgl-pax:section)
+  (@collections mgl-pax:section))
+
+(defsection @find
+    (:title "Find secrets")
   (find-all-secrets function)
+  (get-secret-of-item function)
   (stringify-secret function)
   (get-secret-item-attributes function)
   (get-secret-item-attribute function)
   (get-secret-item-property function)
   (secret-item-search-error condition)
+  (find-the-secret function))
+
+(defsection @manage
+    (:title "Manage secrets")
+  (create-item function)
+  (delete-secret function))
+
+(define-glossary-term collection ()
+                      "[Collection](https://specifications.freedesktop.org/secret-service/latest/ch03.html) is a group of secret service items (keyring, wallet). Each secret is part of a collection.
+
+They are identified by the path. There are two commonly used collections - session and login.
+
+Collection can be accessed by an alias. Alias DEFAULT should be always present.")
+
+(defsection @collections
+    (:title "Collections")
+  (collection glossary-term)
+  (default-collection function)
+  (*login-collection* variable)
+  (*session-collection* variable)
   (get-collections-list function)
   (find-collection-by-name function)
   (get-collection-by-alias function)
-  (get-collection-attributes function)
-  (find-the-secret function)
-  (create-item function)
-  (delete-secret function))
+  (get-collection-attributes function))
 
 ;;;; (mgl-pax:update-asdf-system-html-docs secret-service::@index :secret-service)
 
@@ -201,9 +242,9 @@ Raise error otherwise, or when the secret needs to be unlocked."
 
 (defun (setf get-secret-item-property) (value item label)
   (invoke-properties-method item "Set" "ssv" secrets-interface-item label
-                    (etypecase value
-                      (string `((:string) ,value))
-                      (cons `("a{ss}" ,value)))))
+                            (etypecase value
+                              (string `((:string) ,value))
+                              (cons `("a{ss}" ,value)))))
 
 (defun get-secret-item-label (item-path)
   "Get label of item with ITEM-PATH"
@@ -221,7 +262,7 @@ Raise error otherwise, or when the secret needs to be unlocked."
                     &key replace (content-type "text/plain"))
   "Create an item.
 
-  Collection-path is a path to the collection (e.g.,\"/org/freedesktop/secrets/collection/login\", LABEL name, DICT alist of attributes (all atoms strings), and SECRET the secret to store."
+  Collection-path is a path to the COLLECTION that should store the secret LABEL is name of the secret, DICT alist of attributes (all atoms strings), and SECRET the secret to store."
   (with-open-bus (bus (session-server-addresses))
     (with-introspected-object (ss2 bus collection-path secrets-service)
       (ss2 "org.freedesktop.Secret.Collection" "CreateItem"
@@ -239,10 +280,19 @@ Raise error otherwise, or when the secret needs to be unlocked."
 
 
 ;;;; Collections
+(defvar *session-collection* "/org/freedesktop/secrets/collection/session"
+  "Path to the collection named session. Gnome keyring provides this collection; it has lifetime of the logged in user session.
+
+It may or may not exist with other Service Providers.")
+
+(defvar *login-collection* "/org/freedesktop/secrets/collection/login"
+  "Path to the collection named login. This is a commonly used collection.")
+
 (defun get-collection-attributes (collection-path)
   (get-item-class-attributes "org.freedesktop.Secret.Collection" collection-path))
 
 (defun get-collections-list ()
+  "List of available collections."
   (invoke-properties-method secrets-path "Get" "ss" "org.freedesktop.Secret.Service" "Collections"))
 
 (defun nil-if-slash (object)
@@ -260,6 +310,10 @@ Raise error otherwise, or when the secret needs to be unlocked."
       (find name (get-collections-list)
             :key (lambda (p) (second (assoc :label (get-collection-attributes p))))
             :test 'equal)))
+
+(defun default-collection ()
+  "Default collection, that is, collection with alias default."
+  (get-collection-by-alias "default"))
 
 
 ;;;; Locking

@@ -13,6 +13,8 @@ would return password for the secret with parameter machine having provided valu
 
 See [[./test.lisp][test cases]] for more detail on creating and searching secrets and work with collections.
 
+See [[https://doc.zellerin.cz/secret-service/][documentation]].
+
 BUGS/TODOS:
 - encryption on fly in dbus (non-plain sessions)
 - complete the few missing APIs (collections mostly)

@@ -72,7 +72,7 @@ Create secret, rename its label and attribute, and delete it. At each step test 
   "Check that find-the-secret signals unless just one item found."
   (flet ((find-single-match () (find-the-secret '(("cl-test-id" "1"))))
          (add-new (label)
-           (create-item "/org/freedesktop/secrets/collection/session" label
+           (create-item *session-collection* label
                         '(("cl-test-id" "1")) "Don't tell")))
     (with-temp-secrets ("1")
       (signals secret-item-search-error (find-single-match))
