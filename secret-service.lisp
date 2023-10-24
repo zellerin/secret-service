@@ -179,16 +179,18 @@ E.g.,
                              (return))))))))))
 
 (defun get-secret-of-item (path)
-  "Get secret from secret item on PATH.
+  "Get secret from secret item on PATH. Second value is path itself.
 
 Provide restart that tries to unlock and read again. This should not be standard
 situation, but, as API standard says, The inherent race conditions present due
 to this are unavoidable, and must be handled gracefully."
   (restart-case
-      (stringify-secret
-       (with-open-bus (bus (session-server-addresses))
-         (with-introspected-object (item bus path secrets-service)
-           (item secrets-interface-item "GetSecret" (get-session bus)))))
+      (values
+       (stringify-secret
+        (with-open-bus (bus (session-server-addresses))
+          (with-introspected-object (item bus path secrets-service)
+            (item secrets-interface-item "GetSecret" (get-session bus)))))
+       path)
     (attempt-unlock (err)
       ;; can we do better? Is this guaranteed to work on other backends?
       (when (equalp (method-error-arguments err)
