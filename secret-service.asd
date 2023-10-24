@@ -7,6 +7,8 @@
   :license  "Specify license here"
   :version "1.0"
   :serial t
+  :homepage "https://doc.zellerin.cz/secret-service/"
+  :source-control (:git "https://github.com/zellerin/secret-service")
   :depends-on ("dbus" "mgl-pax")
   :components ((:file "package")
                (:file "secret-service"))
