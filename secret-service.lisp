@@ -205,10 +205,12 @@ Raise error otherwise, or when the secret needs to be unlocked."
       (find-secret-paths pars)
     (cond
       ((and unlocked (null locked) (null (cdr unlocked)))
-       (get-secret-of-item (first unlocked)))
+       (list (get-secret-item-attribute (first unlocked) "login")
+             (get-secret-of-item (first unlocked))))
       ((and locked (null unlocked) (null (cdr locked)))
        (unlock-secret-item (car locked))
-       (get-secret-of-item (car locked)))
+       (list (get-secret-item-attribute (first unlocked) "login")
+             (get-secret-of-item (first unlocked))))
       ((and (null locked) (null unlocked)
             (error 'secret-item-search-error :parameters pars
                                              :text "No matching secret")))
